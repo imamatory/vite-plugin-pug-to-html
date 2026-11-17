@@ -40,13 +40,16 @@
     "format": "oxfmt --check",
     "knip": "knip",
     "check": "npm run build && npm run typecheck && npm run lint && npm run format && npm run knip && npm test && npm pack --dry-run",
-    "fix": "oxlint --fix && oxfmt"
+    "fix": "oxlint --fix && oxfmt",
+    "commitlint": "commitlint --from origin/main --to HEAD"
   },
   "dependencies": {
     "fast-glob": "^3.3.3",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {
+    "@commitlint/cli": "^21.2.4",
+    "@commitlint/config-conventional": "^21.2.4",
     "@types/node": "^22.0.0",
     "knip": "^6.45.1",
     "oxfmt": "^0.79.0",
