@@ -1,5 +1,3 @@
-import type { Plugin } from 'vite';
-
 /**
  * Pug compiler options the plugin accepts. Function-valued options are not: pass `filters` with the
  * `filtersModule` plugin option; `plugins` are not supported.
@@ -51,5 +49,3 @@ export interface PugToHtmlOptions {
   /** Directory of the dev cache file `pug-cache.json`. Default: Vite's `cacheDir`. */
   cacheDir?: string;
 }
-
-export default function pugToHtmlPlugin(options: PugToHtmlOptions): Plugin;

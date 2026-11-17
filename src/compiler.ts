@@ -12,6 +12,7 @@ import { readFileSync } from 'fs';
 import { createRequire } from 'module';
 import path from 'path';
 import { pathToFileURL } from 'url';
+import type { PugToHtmlPugOptions } from './types.js';
 
 const require = createRequire(import.meta.url);
 // The stage packages are dependencies of `pug`, so resolve them from there: the versions always
@@ -30,7 +31,17 @@ const runtimeWrap = pugRequire('pug-runtime/wrap');
 // accepted: `filters` come from the `filtersModule` plugin option, `plugins` are not supported.
 const PUG_OPTION_NAMES = ['basedir', 'doctype', 'filterAliases', 'filterOptions', 'globals', 'pretty', 'self'];
 
-export function validatePugOptions(pugOptions) {
+/** A plain object that is sent to workers as it is, or a module the worker imports itself. */
+export type ModuleSpec =
+  | { value: Record<string, unknown>; path?: undefined }
+  | { path: string; exportName?: string | undefined };
+
+export interface RenderResult {
+  html: string;
+  dependencies: string[];
+}
+
+export function validatePugOptions(pugOptions: object): void {
   const unknown = Object.keys(pugOptions).filter((name) => !PUG_OPTION_NAMES.includes(name));
   if (unknown.length > 0) {
     const hint = unknown.includes('filters') ? '; pass filters with the "filtersModule" option' : '';
@@ -44,10 +55,10 @@ export function validatePugOptions(pugOptions) {
  * Resolve an object from a spec that can be sent to a worker: `{ value }` (a plain object) or
  * `{ path, exportName }` (a module to import). Used for template params and for filters.
  */
-export async function loadModuleSpec(spec) {
-  if (!spec.path) return spec.value;
+export async function loadModuleSpec(spec: ModuleSpec): Promise<Record<string, unknown>> {
+  if (spec.path === undefined) return spec.value;
 
-  const mod = await import(pathToFileURL(spec.path).href);
+  const mod: Record<string, any> = await import(pathToFileURL(spec.path).href);
   // For a CommonJS module `default` is `module.exports`; named exports are not always detected.
   const params = spec.exportName ? (mod[spec.exportName] ?? mod.default?.[spec.exportName]) : (mod.default ?? mod);
   if (!params || typeof params !== 'object') {
@@ -57,18 +68,30 @@ export async function loadModuleSpec(spec) {
   return params;
 }
 
-export function createCompiler({ templateParams = {}, filters: customFilters = {}, pugOptions = {} } = {}) {
+export interface CompilerOptions {
+  templateParams?: Record<string, unknown>;
+  filters?: Record<string, unknown>;
+  pugOptions?: PugToHtmlPugOptions;
+}
+
+export function createCompiler({
+  templateParams = {},
+  filters: customFilters = {},
+  pugOptions = {},
+}: CompilerOptions = {}): {
+  render: (filePath: string) => RenderResult;
+} {
   validatePugOptions(pugOptions);
 
   // filename → { source, ast }. An entry is reused only while the file content is the same, so
   // edits in dev need no explicit invalidation.
-  const astCache = new Map();
+  const astCache = new Map<string, { source: string; ast: unknown }>();
 
-  const parseFile = (source, filename) => {
+  const parseFile = (source: string, filename: string) => {
     const cached = astCache.get(filename);
     if (cached && cached.source === source) return cached.ast;
 
-    const tokens = lex(source, { filename }).map((token) =>
+    const tokens = lex(source, { filename }).map((token: { type: string; val: string }) =>
       token.type === 'path' && path.extname(token.val) === '' ? { ...token, val: `${token.val}.pug` } : token,
     );
     const ast = parse(stripComments(tokens, { filename }), { filename, src: source });
@@ -76,22 +99,20 @@ export function createCompiler({ templateParams = {}, filters: customFilters = {
     return ast;
   };
 
-  const compile = (filePath, compileDebug) => {
-    const dependencies = [];
+  const compile = (filePath: string, compileDebug: boolean) => {
+    const dependencies: string[] = [];
     const loaded = load.string(readFileSync(filePath, 'utf8'), {
       filename: filePath,
       basedir: pugOptions.basedir,
       // Lexing is deferred to `parse`, where the filename is known and the cache can be used.
-      lex: (source) => source,
-      parse: (source, options) => parseFile(source, options.filename),
-      read: (filename) => {
+      lex: (source: string) => source,
+      parse: (source: string, options: { filename: string }) => parseFile(source, options.filename),
+      read: (filename: string) => {
         dependencies.push(filename);
         return readFileSync(filename);
       },
     });
-    const ast = link(
-      filters.handleFilters(loaded, customFilters, pugOptions.filterOptions, pugOptions.filterAliases),
-    );
+    const ast = link(filters.handleFilters(loaded, customFilters, pugOptions.filterOptions, pugOptions.filterAliases));
     const body = generateCode(ast, {
       compileDebug,
       pretty: pugOptions.pretty ?? false,
@@ -106,7 +127,7 @@ export function createCompiler({ templateParams = {}, filters: customFilters = {
   };
 
   /** Compile one page. Returns `{ html, dependencies }`; `dependencies` lists included files. */
-  const renderFast = (filePath) => {
+  const renderFast = (filePath: string): RenderResult => {
     const compiled = compile(filePath, false);
     try {
       return { html: compiled.template(templateParams), dependencies: compiled.dependencies };
@@ -118,11 +139,14 @@ export function createCompiler({ templateParams = {}, filters: customFilters = {
     }
   };
 
-  const render = (filePath) => {
+  const render = (filePath: string): RenderResult => {
     try {
       return renderFast(filePath);
     } catch (error) {
-      throw new Error(`pug-to-html: failed to compile ${filePath}\n${error?.message ?? error}`, { cause: error });
+      throw new Error(
+        `pug-to-html: failed to compile ${filePath}\n${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
     }
   };
 

@@ -1,4 +1,6 @@
 import { Worker } from 'worker_threads';
+import type { RenderResult } from './compiler.js';
+import type { WorkerData, WorkerMessage } from './worker-protocol.js';
 
 const WORKER_URL = new URL('./worker.js', import.meta.url);
 
@@ -17,18 +19,26 @@ export class CompileCancelledError extends Error {
  * `files`. It rejects on the first failed page, on a crashed worker or on `cancel()`. All
  * workers are terminated before the promise settles in any way, so nothing keeps the process alive.
  */
-export function compileInWorkers({ files, workerCount, workerData }) {
-  const workers = [];
-  const results = new Array(files.length);
+export function compileInWorkers({
+  files,
+  workerCount,
+  workerData,
+}: {
+  files: string[];
+  workerCount: number;
+  workerData: WorkerData;
+}): { promise: Promise<RenderResult[]>; cancel: () => void } {
+  const workers: Worker[] = [];
+  const results: RenderResult[] = [];
   let nextIndex = 0;
   let doneCount = 0;
   let settled = false;
-  let settle;
-  const promise = new Promise((resolve, reject) => {
+  let settle!: { resolve: (value: RenderResult[]) => void; reject: (error: unknown) => void };
+  const promise = new Promise<RenderResult[]>((resolve, reject) => {
     settle = { resolve, reject };
   });
 
-  const finish = (error) => {
+  const finish = (error?: unknown) => {
     if (settled) return;
     settled = true;
     Promise.allSettled(workers.map((worker) => worker.terminate())).then(() => {
@@ -37,23 +47,24 @@ export function compileInWorkers({ files, workerCount, workerData }) {
     });
   };
 
-  const dispatch = (worker) => {
+  const dispatch = (worker: Worker) => {
     if (nextIndex >= files.length) return;
     const id = nextIndex;
     nextIndex += 1;
     worker.postMessage({ id, filePath: files[id] });
   };
 
-  const onMessage = (worker, { id, html, dependencies, error }) => {
+  const onMessage = (worker: Worker, message: WorkerMessage) => {
     if (settled) return;
-    if (error) {
+    if ('error' in message) {
+      const { error } = message;
       // The message already names the file (see `render` in compiler.js).
       const failure = new Error(error.message);
       failure.stack = error.stack ?? failure.stack;
       finish(failure);
       return;
     }
-    results[id] = { html, dependencies };
+    results[message.id] = { html: message.html, dependencies: message.dependencies };
     doneCount += 1;
     if (doneCount === files.length) finish();
     else dispatch(worker);
@@ -62,10 +73,12 @@ export function compileInWorkers({ files, workerCount, workerData }) {
   const startWorker = () => {
     const worker = new Worker(WORKER_URL, { workerData });
     workers.push(worker);
-    worker.on('message', (message) => onMessage(worker, message));
+    worker.on('message', (message: WorkerMessage) => onMessage(worker, message));
     // Thrown outside a page compile, e.g. the template params module failed to load.
-    worker.on('error', (error) => finish(error));
-    worker.on('exit', (code) => finish(new Error(`pug-to-html: worker exited with code ${code} before finishing`)));
+    worker.on('error', (error: Error) => finish(error));
+    worker.on('exit', (code: number) =>
+      finish(new Error(`pug-to-html: worker exited with code ${code} before finishing`)),
+    );
     dispatch(worker);
   };
 

@@ -5,22 +5,59 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
-import pugToHtmlPlugin from '../src/index.js';
+import type { TestContext } from 'node:test';
+import pugToHtmlPlugin from '../dist/index.js';
+import type { PugToHtmlOptions } from '../dist/index.js';
 
-const pug = createRequire(import.meta.url)('pug');
+const pug = createRequire(import.meta.url)('pug') as {
+  compileFile: (file: string, options?: object) => (locals?: object) => string;
+};
 
-let root;
-let src;
-let dest;
+// The hooks the tests call directly, in the shapes Vite passes.
+interface Hooks {
+  configResolved(config: {
+    command: 'build' | 'serve';
+    cacheDir: string;
+    logger?: { info: () => void; warn: (message: string) => void; error: () => void };
+  }): void;
+  buildStart(): void;
+  buildEnd(error?: Error): void;
+  closeBundle(): Promise<void>;
+  configureServer(server: unknown): Promise<void>;
+}
+type TestPlugin = Hooks;
 
-const write = (name, content) => {
+type Handlers = Record<string, (file: string) => Promise<void>>;
+
+const handler = (handlers: Handlers, event: string) => {
+  const fn = handlers[event];
+  if (!fn) throw new Error(`no ${event} handler registered`);
+  return fn;
+};
+
+const fakeServer = (handlers: Handlers, send: (message: unknown) => void = () => {}) => ({
+  watcher: {
+    add: () => {},
+    on: (event: string, fn: (file: string) => Promise<void>) => Object.assign(handlers, { [event]: fn }),
+  },
+  ws: { send },
+  config: { logger: { error: () => {} } },
+});
+
+const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+let root: string;
+let src: string;
+let dest: string;
+
+const write = (name: string, content: string) => {
   const file = path.join(src, name);
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, content);
   return file;
 };
 
-const writePages = (count) => {
+const writePages = (count: number) => {
   write('layout.pug', 'html\n  body\n    include partials/header\n    block content\n');
   write('partials/header.pug', 'header(class=["a", "b"]) #{title || "none"}\n');
   for (let i = 0; i < count; i += 1) {
@@ -34,7 +71,7 @@ const writeParamsModule = () => {
   return { path: file, exportName: 'PARAMS' };
 };
 
-const createPlugin = (options = {}) => {
+const createPlugin = (options: Partial<PugToHtmlOptions> = {}): TestPlugin => {
   const plugin = pugToHtmlPlugin({
     input: { pages: path.join(src, 'pages/*.pug') },
     dest,
@@ -42,19 +79,20 @@ const createPlugin = (options = {}) => {
     templateParamsModule: writeParamsModule(),
     ...options,
   });
-  plugin.configResolved({ command: 'build', cacheDir: path.join(root, 'cache') });
-  return plugin;
+  const hooks = plugin as unknown as TestPlugin;
+  hooks.configResolved({ command: 'build', cacheDir: path.join(root, 'cache') });
+  return hooks;
 };
 
 // The hooks in the order Vite calls them; `vite:prepare-out-dir` empties `dest` in between.
-const runBuild = async (plugin) => {
+const runBuild = async (plugin: TestPlugin) => {
   plugin.buildStart();
   rmSync(dest, { recursive: true, force: true });
   plugin.buildEnd();
   await plugin.closeBundle();
 };
 
-const silenceConsole = (t) => {
+const silenceConsole = (t: TestContext) => {
   t.mock.method(console, 'log', () => {});
 };
 
@@ -68,7 +106,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-[false, 2].forEach((workers) => {
+([false, 2] as const).forEach((workers) => {
   test(`build output equals pug.compileFile (workers: ${workers})`, async (t) => {
     silenceConsole(t);
     writePages(20);
@@ -76,7 +114,7 @@ afterEach(() => {
     await runBuild(createPlugin({ workers }));
 
     for (let i = 0; i < 20; i += 1) {
-      const expected = pug.compileFile(path.join(src, `pages/page${i}.pug`))({ shout: (s) => s.toUpperCase() });
+      const expected = pug.compileFile(path.join(src, `pages/page${i}.pug`))({ shout: (s: string) => s.toUpperCase() });
       assert.equal(readFileSync(path.join(dest, `pages/page${i}.html`), 'utf8'), expected);
     }
   });
@@ -86,12 +124,15 @@ afterEach(() => {
     writePages(20);
     write('pages/filtered.pug', 'div\n  :wrap(tag="em")\n    hello\n');
     const filtersFile = path.join(root, 'filters.mjs');
-    writeFileSync(filtersFile, 'export const FILTERS = { wrap: (text, { tag }) => `<${tag}>${text.toUpperCase()}</${tag}>` };\n');
+    writeFileSync(
+      filtersFile,
+      'export const FILTERS = { wrap: (text, { tag }) => `<${tag}>${text.toUpperCase()}</${tag}>` };\n',
+    );
 
     await runBuild(createPlugin({ workers, filtersModule: { path: filtersFile, exportName: 'FILTERS' } }));
 
     const expected = pug.compileFile(path.join(src, 'pages/filtered.pug'), {
-      filters: { wrap: (text, { tag }) => `<${tag}>${text.toUpperCase()}</${tag}>` },
+      filters: { wrap: (text: string, { tag }: { tag: string }) => `<${tag}>${text.toUpperCase()}</${tag}>` },
     })();
     assert.equal(expected, '<div><em>HELLO</em></div>');
     assert.equal(readFileSync(path.join(dest, 'pages/filtered.html'), 'utf8'), expected);
@@ -102,9 +143,9 @@ afterEach(() => {
     writePages(20);
     const broken = write('pages/broken.pug', 'p(class="unclosed"\n');
 
-    await assert.rejects(runBuild(createPlugin({ workers })), (error) => {
-      assert.match(error.message, /pug-to-html: failed to compile/);
-      assert.ok(error.message.includes(broken));
+    await assert.rejects(runBuild(createPlugin({ workers })), (error: unknown) => {
+      assert.match(errorMessage(error), /pug-to-html: failed to compile/);
+      assert.ok(errorMessage(error).includes(broken));
       return true;
     });
   });
@@ -114,9 +155,9 @@ afterEach(() => {
     writePages(20);
     const broken = write('pages/broken.pug', 'p ok\np= missing.property\n');
 
-    await assert.rejects(runBuild(createPlugin({ workers })), (error) => {
-      assert.ok(error.message.includes(`${broken}:2`), error.message);
-      assert.match(error.message, /missing/);
+    await assert.rejects(runBuild(createPlugin({ workers })), (error: unknown) => {
+      assert.ok(errorMessage(error).includes(`${broken}:2`), errorMessage(error));
+      assert.match(errorMessage(error), /missing/);
       return true;
     });
   });
@@ -127,9 +168,9 @@ test('an error in an included file names the page and the include', async (t) =>
   writePages(20);
   write('partials/header.pug', 'header(\n');
 
-  await assert.rejects(runBuild(createPlugin({ workers: 2 })), (error) => {
-    assert.match(error.message, /pages\/page\d+\.pug/);
-    assert.ok(error.message.includes(path.join(src, 'partials/header.pug')));
+  await assert.rejects(runBuild(createPlugin({ workers: 2 })), (error: unknown) => {
+    assert.match(errorMessage(error), /pages\/page\d+\.pug/);
+    assert.ok(errorMessage(error).includes(path.join(src, 'partials/header.pug')));
     return true;
   });
 });
@@ -148,7 +189,7 @@ test('filterAliases and filterOptions reach the filter', async (t) => {
 
   const expected = pug.compileFile(path.join(src, 'pages/aliased.pug'), {
     ...pugOptions,
-    filters: { wrap: (text, { tag }) => `<${tag}>${text}</${tag}>` },
+    filters: { wrap: (text: string, { tag }: { tag: string }) => `<${tag}>${text}</${tag}>` },
   })();
   assert.equal(expected, '<div><b>hello</b></div>');
   assert.equal(readFileSync(path.join(dest, 'pages/aliased.html'), 'utf8'), expected);
@@ -188,7 +229,7 @@ test('template params with functions are compiled on the main thread', async (t)
   const plugin = createPlugin({
     workers: 2,
     templateParamsModule: undefined,
-    templateParams: { shout: (s) => `${s}!` },
+    templateParams: { shout: (s: string) => `${s}!` },
   });
 
   await runBuild(plugin);
@@ -198,13 +239,15 @@ test('template params with functions are compiled on the main thread', async (t)
 
 test('rejects invalid options', () => {
   const base = { input: { pages: 'x/*.pug' }, dest: '/tmp/x' };
-  assert.throws(() => pugToHtmlPlugin({ dest: '/tmp/x' }), /"input"/);
-  assert.throws(() => pugToHtmlPlugin({ input: {} }), /"dest"/);
-  assert.throws(() => pugToHtmlPlugin({ ...base, workers: -1 }), /"workers"/);
-  assert.throws(() => pugToHtmlPlugin({ ...base, pugOptions: { filters: {} } }), /filters.*"filtersModule"/);
-  assert.throws(() => pugToHtmlPlugin({ ...base, filtersModule: 'relative.js' }), /"filtersModule" must be an absolute/);
-  assert.throws(() => pugToHtmlPlugin({ ...base, templateParamsModule: 'relative.js' }), /absolute path/);
-  assert.throws(() => pugToHtmlPlugin({ ...base, templateParams: {}, templateParamsModule: '/abs.js' }), /not both/);
+  // Options a type-checked caller cannot pass, but a JavaScript caller can.
+  const loose = (options: object) => pugToHtmlPlugin(options as PugToHtmlOptions);
+  assert.throws(() => loose({ dest: '/tmp/x' }), /"input"/);
+  assert.throws(() => loose({ input: {} }), /"dest"/);
+  assert.throws(() => loose({ ...base, workers: -1 }), /"workers"/);
+  assert.throws(() => loose({ ...base, pugOptions: { filters: {} } }), /filters.*"filtersModule"/);
+  assert.throws(() => loose({ ...base, filtersModule: 'relative.js' }), /"filtersModule" must be an absolute/);
+  assert.throws(() => loose({ ...base, templateParamsModule: 'relative.js' }), /absolute path/);
+  assert.throws(() => loose({ ...base, templateParams: {}, templateParamsModule: '/abs.js' }), /not both/);
 });
 
 test('an input key cannot write outside dest', async (t) => {
@@ -219,13 +262,9 @@ test('dev compiles only the pages whose sources changed', async () => {
   writePages(3);
   const plugin = createPlugin();
   plugin.configResolved({ command: 'serve', cacheDir: path.join(root, 'cache') });
-  const handlers = {};
-  const sent = [];
-  const server = {
-    watcher: { add: () => {}, on: (event, handler) => Object.assign(handlers, { [event]: handler }) },
-    ws: { send: (message) => sent.push(message) },
-    config: { logger: { error: () => {} } },
-  };
+  const handlers: Handlers = {};
+  const sent: any[] = [];
+  const server = fakeServer(handlers, (m) => sent.push(m));
 
   await plugin.configureServer(server);
   const page0 = path.join(dest, 'pages/page0.html');
@@ -236,27 +275,22 @@ test('dev compiles only the pages whose sources changed', async () => {
   writeFileSync(page0, 'stale');
   writeFileSync(page1, 'stale');
   const source = write('pages/page1.pug', 'p changed\n');
-  await handlers.change(source);
+  await handler(handlers, 'change')(source);
   assert.equal(readFileSync(page0, 'utf8'), 'stale');
   assert.equal(readFileSync(page1, 'utf8'), '<p>changed</p>');
-  assert.deepEqual(sent, [{ type: 'full-reload' }]);
+  assert.deepEqual([...sent], [{ type: 'full-reload' }]);
 
   // A broken template is reported to the client and does not throw.
   write('pages/page1.pug', 'p(\n');
-  await handlers.change(source);
-  assert.equal(sent[1].type, 'error');
-  assert.ok(sent[1].err.message.includes(source));
+  await handler(handlers, 'change')(source);
+  assert.equal(sent[1]?.type, 'error');
+  assert.ok(sent[1]?.err.message.includes(source));
 });
 
-const startDevServer = async (plugin) => {
+const startDevServer = async (plugin: TestPlugin): Promise<Handlers> => {
   plugin.configResolved({ command: 'serve', cacheDir: path.join(root, 'cache') });
-  const handlers = {};
-  const server = {
-    watcher: { add: () => {}, on: (event, handler) => Object.assign(handlers, { [event]: handler }) },
-    ws: { send: () => {} },
-    config: { logger: { error: () => {} } },
-  };
-  await plugin.configureServer(server);
+  const handlers: Handlers = {};
+  await plugin.configureServer(fakeServer(handlers));
   return handlers;
 };
 
@@ -266,7 +300,7 @@ test('dev removes the html of a removed page and keeps the others', async () => 
   const removed = path.join(src, 'pages/page1.pug');
 
   rmSync(removed);
-  await handlers.unlink(removed);
+  await handler(handlers, 'unlink')(removed);
 
   assert.equal(existsSync(path.join(dest, 'pages/page1.html')), false);
   assert.equal(existsSync(path.join(dest, 'pages/page0.html')), true);
@@ -298,7 +332,7 @@ test('dev rewrites an html file that another page still writes', async (t) => {
   assert.equal(readFileSync(html, 'utf8'), '<p>other</p>');
 
   rmSync(other);
-  await handlers.unlink(other);
+  await handler(handlers, 'unlink')(other);
 
   assert.match(readFileSync(html, 'utf8'), /page 0 X/);
 });
@@ -307,7 +341,7 @@ test('two pages that write the same html file are reported once', async (t) => {
   silenceConsole(t);
   writePages(1);
   write('other/page0.pug', 'p other\n');
-  const warnings = [];
+  const warnings: string[] = [];
   const plugin = createPlugin({
     workers: false,
     input: { pages: [path.join(src, 'pages/*.pug'), path.join(src, 'other/*.pug')] },
@@ -315,12 +349,12 @@ test('two pages that write the same html file are reported once', async (t) => {
   plugin.configResolved({
     command: 'build',
     cacheDir: path.join(root, 'cache'),
-    logger: { info: () => {}, warn: (message) => warnings.push(message), error: () => {} },
+    logger: { info: () => {}, warn: (m) => void warnings.push(m), error: () => {} },
   });
 
   await runBuild(plugin);
   await runBuild(plugin);
 
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /both write .*page0\.html/);
+  assert.match(warnings[0] ?? '', /both write .*page0\.html/);
 });
