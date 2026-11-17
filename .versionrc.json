@@ -1,0 +1,4 @@
+{
+  "releaseCommitMessageFormat": "chore: release {{currentTag}}",
+  "npmPublishHint": "git push --follow-tags origin main (CI publishes the tag to npm and creates the GitHub release)"
+}

@@ -273,6 +273,18 @@ pnpm run check # only the package part: build, types, lint, format, Knip, tests,
 The tests use `node:test` and temporary fixture directories, and call the hooks in the order Vite does. They run
 against the built package, so `pnpm test` needs `pnpm run build` first.
 
+### Releasing
+
+Commits follow Conventional Commits, so the next version and the changelog come from them. On `main`, with a clean tree:
+
+```sh
+pnpm run release # bumps package.json, writes CHANGELOG.md, commits and tags vX.Y.Z
+git push --follow-tags origin main
+```
+
+The tag starts the Publish workflow: it runs the checks, publishes to npm and creates the GitHub release from the
+matching `CHANGELOG.md` section. Use `pnpm run release -- --release-as minor` to override the computed bump.
+
 ## License
 
 [MIT](LICENSE)
