@@ -7,12 +7,20 @@ const plugin: Plugin = pugToHtmlPlugin({
   dest: '/abs/dist',
   templateParamsModule: { path: '/abs/params.js', exportName: 'PARAMS' },
   filtersModule: '/abs/filters.js',
-  pugOptions: { basedir: '/abs/src', pretty: false, filterAliases: { md: 'markdown' }, filterOptions: { md: { html: true } } },
+  pugOptions: {
+    basedir: '/abs/src',
+    pretty: false,
+    filterAliases: { md: 'markdown' },
+    filterOptions: { md: { html: true } },
+  },
   workers: 'auto',
 });
 
 export const config: UserConfig = {
-  plugins: [plugin, pugToHtmlPlugin({ input: { pages: 'x/*.pug' }, dest: 'dist', templateParams: { a: 1 }, workers: false })],
+  plugins: [
+    plugin,
+    pugToHtmlPlugin({ input: { pages: 'x/*.pug' }, dest: 'dist', templateParams: { a: 1 }, workers: false }),
+  ],
 };
 
 // @ts-expect-error `dest` is required

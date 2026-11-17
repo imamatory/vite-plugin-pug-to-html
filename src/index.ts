@@ -23,19 +23,55 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { createRequire } from 'module';
 import os from 'os';
 import path from 'path';
+import type { Plugin, ResolvedConfig, ViteDevServer } from 'vite';
 import { createCompiler, loadModuleSpec, validatePugOptions } from './compiler.js';
+import type { ModuleSpec, RenderResult } from './compiler.js';
 import { CompileCancelledError, compileInWorkers } from './pool.js';
+import type { PugToHtmlModule, PugToHtmlOptions } from './types.js';
+
+export type { PugToHtmlModule, PugToHtmlOptions, PugToHtmlPugOptions } from './types.js';
 
 const require = createRequire(import.meta.url);
-const { globSync } = require('fast-glob');
-const pc = require('picocolors');
+const { globSync } = require('fast-glob') as typeof import('fast-glob');
+const pc = require('picocolors') as typeof import('picocolors');
 
 // Used until `configResolved` provides Vite's logger, e.g. when the hooks are called directly.
-const consoleLogger = {
+interface Logger {
+  info(message: string): void;
+  warn(message: string): void;
+  error(message: string, options?: { error?: Error }): void;
+}
+
+const consoleLogger: Logger = {
   info: (message) => console.log(message),
   warn: (message) => console.warn(message),
   error: (message) => console.error(message),
 };
+
+interface CacheEntry {
+  output: string;
+  dependencies: string[];
+  mtimes: Record<string, number | null>;
+}
+
+interface PugCache {
+  version: number;
+  files: Record<string, CacheEntry>;
+}
+
+interface Page {
+  filePath: string;
+  htmlPath: string;
+}
+
+interface BuildJob {
+  pages: Page[];
+  workerCount: number;
+  startedAt: number;
+  promise: Promise<RenderResult[]> | null;
+  cancel: () => void;
+  compiledAt?: number | null;
+}
 
 const PUG_CACHE_VERSION = 1;
 const PUG_CACHE_FILE = 'pug-cache.json';
@@ -45,7 +81,7 @@ const MAX_AUTO_WORKERS = 4;
 // A worker costs about 100 ms to start; do not start one for a handful of pages.
 const MIN_PAGES_PER_WORKER = 8;
 
-const isCloneable = (value) => {
+const isCloneable = (value: unknown): boolean => {
   try {
     structuredClone(value);
     return true;
@@ -54,7 +90,10 @@ const isCloneable = (value) => {
   }
 };
 
-const resolveTemplateParamsSpec = (templateParams, templateParamsModule) => {
+const resolveTemplateParamsSpec = (
+  templateParams: PugToHtmlOptions['templateParams'],
+  templateParamsModule: PugToHtmlOptions['templateParamsModule'],
+): ModuleSpec => {
   if (templateParamsModule === undefined) {
     if (templateParams !== undefined && (templateParams === null || typeof templateParams !== 'object')) {
       throw new Error(`pug-to-html: "templateParams" must be an object, got ${typeof templateParams}`);
@@ -69,27 +108,28 @@ const resolveTemplateParamsSpec = (templateParams, templateParamsModule) => {
 };
 
 // `filtersModule`: filters are functions, so they always come from a module the workers import.
-const resolveFiltersSpec = (filtersModule) =>
+const resolveFiltersSpec = (filtersModule: PugToHtmlOptions['filtersModule']): ModuleSpec =>
   filtersModule === undefined ? { value: {} } : resolveModuleOption('filtersModule', filtersModule);
 
-const resolveModuleOption = (name, option) => {
-  const spec = typeof option === 'string' ? { path: option } : option;
+const resolveModuleOption = (name: string, option: string | PugToHtmlModule): ModuleSpec => {
+  const spec: Partial<PugToHtmlModule> | null = typeof option === 'string' ? { path: option } : option;
   if (!spec || typeof spec.path !== 'string' || !path.isAbsolute(spec.path)) {
     throw new Error(`pug-to-html: "${name}" must be an absolute path or { path, exportName }`);
   }
   return { path: spec.path, exportName: spec.exportName };
 };
 
-export default function pugToHtmlPlugin({
-  input,
-  dest,
-  templateParams,
-  templateParamsModule,
-  filtersModule,
-  pugOptions = {},
-  workers = 'auto',
-  cacheDir,
-} = {}) {
+export default function pugToHtmlPlugin(options: PugToHtmlOptions): Plugin {
+  const {
+    input,
+    dest,
+    templateParams,
+    templateParamsModule,
+    filtersModule,
+    pugOptions = {},
+    workers = 'auto',
+    cacheDir,
+  } = options ?? {};
   if (!input || typeof input !== 'object') {
     throw new Error(`pug-to-html: "input" must be an object, got ${typeof input}`);
   }
@@ -102,18 +142,18 @@ export default function pugToHtmlPlugin({
   validatePugOptions(pugOptions);
   const templateParamsSpec = resolveTemplateParamsSpec(templateParams, templateParamsModule);
   const filtersSpec = resolveFiltersSpec(filtersModule);
-  const canUseWorkers = Boolean(templateParamsSpec.path) || isCloneable(templateParamsSpec.value);
+  const canUseWorkers = templateParamsSpec.path !== undefined || isCloneable(templateParamsSpec.value);
 
   const destRoot = path.resolve(dest);
-  const globResults = {};
-  const writtenFiles = [];
+  const globResults: Record<string, string[]> = {};
+  const writtenFiles: string[] = [];
   // html paths written by two pages, already reported: warn once, not on every dev recompile.
   const reportedCollisions = new Set();
   let isBuild = false;
-  let viteCacheDir;
-  let logger = consoleLogger;
-  let buildJob = null;
-  let compilerPromise;
+  let viteCacheDir: string | undefined;
+  let logger: Logger = consoleLogger;
+  let buildJob: BuildJob | null = null;
+  let compilerPromise: Promise<ReturnType<typeof createCompiler>> | undefined;
 
   const getCachePath = () =>
     path.resolve(cacheDir ?? viteCacheDir ?? path.resolve('node_modules/.vite'), PUG_CACHE_FILE);
@@ -125,7 +165,7 @@ export default function pugToHtmlPlugin({
     return compilerPromise;
   };
 
-  const formatSize = (bytes) => {
+  const formatSize = (bytes: number) => {
     const kb = bytes / 1024;
     if (kb >= 1024) {
       return `${(kb / 1024).toFixed(2)} MB`;
@@ -136,13 +176,13 @@ export default function pugToHtmlPlugin({
     return `${bytes} B`;
   };
 
-  const colorBySize = (str, bytes) => {
+  const colorBySize = (str: string, bytes: number) => {
     if (bytes < 10240) return pc.green(str);
     if (bytes < 102400) return pc.yellow(str);
     return pc.red(str);
   };
 
-  const logBuildOutput = (summary) => {
+  const logBuildOutput = (summary: string) => {
     if (writtenFiles.length === 0) return;
 
     const maxLen = Math.max(...writtenFiles.map((f) => path.basename(f).length));
@@ -162,14 +202,14 @@ export default function pugToHtmlPlugin({
     logger.info(`  ${pc.dim(`${writtenFiles.length} files, ${summary}`)}`);
   };
 
-  const loadCache = () => {
+  const loadCache = (): PugCache => {
     const cachePath = getCachePath();
     if (!existsSync(cachePath)) {
       return { version: PUG_CACHE_VERSION, files: {} };
     }
 
     try {
-      const cache = JSON.parse(readFileSync(cachePath, 'utf8'));
+      const cache = JSON.parse(readFileSync(cachePath, 'utf8')) as PugCache;
       if (cache.version !== PUG_CACHE_VERSION || !cache.files) {
         return { version: PUG_CACHE_VERSION, files: {} };
       }
@@ -179,9 +219,9 @@ export default function pugToHtmlPlugin({
     }
   };
 
-  const getMtimeMs = (file) => (existsSync(file) ? statSync(file).mtimeMs : null);
+  const getMtimeMs = (file: string): number | null => (existsSync(file) ? statSync(file).mtimeMs : null);
 
-  const isCacheFresh = (htmlPath, cacheEntry) => {
+  const isCacheFresh = (htmlPath: string, cacheEntry: CacheEntry | undefined): boolean => {
     if (!cacheEntry || cacheEntry.output !== htmlPath || !existsSync(htmlPath)) {
       return false;
     }
@@ -197,15 +237,15 @@ export default function pugToHtmlPlugin({
     });
   };
 
-  const writeCache = (cache) => {
+  const writeCache = (cache: PugCache) => {
     const cachePath = getCachePath();
     mkdirSync(path.dirname(cachePath), { recursive: true });
     writeFileSync(cachePath, `${JSON.stringify(cache, null, 2)}\n`);
   };
 
-  const collectPages = () => {
-    const pages = [];
-    const owners = new Map();
+  const collectPages = (): Page[] => {
+    const pages: Page[] = [];
+    const owners = new Map<string, string>();
 
     Object.entries(input).forEach(([subfolder, pattern]) => {
       const files = globSync(pattern);
@@ -229,13 +269,13 @@ export default function pugToHtmlPlugin({
     return pages;
   };
 
-  const writePage = ({ filePath, htmlPath }, { html, dependencies }, cache) => {
+  const writePage = ({ filePath, htmlPath }: Page, { html, dependencies }: RenderResult, cache: PugCache) => {
     mkdirSync(path.dirname(htmlPath), { recursive: true });
     writeFileSync(htmlPath, html);
     writtenFiles.push(htmlPath);
 
     const allDependencies = [...new Set([filePath, ...dependencies])];
-    const mtimes = {};
+    const mtimes: Record<string, number | null> = {};
     allDependencies.forEach((dependency) => {
       mtimes[dependency] = getMtimeMs(dependency);
     });
@@ -248,16 +288,18 @@ export default function pugToHtmlPlugin({
   // instance can share the cache file. When a current page writes the same html file, its html is
   // now missing, so `compileStale` writes it again instead of keeping the removed page's content.
   // Returns whether the cache changed.
-  const removeGonePages = (pages, cache) => {
+  const removeGonePages = (pages: Page[], cache: PugCache): boolean => {
     const pageFiles = new Set(pages.map((page) => page.filePath));
     const outputDirs = Object.keys(input).map((subfolder) => path.resolve(destRoot, subfolder) + path.sep);
-    const isOwnOutput = (output) => typeof output === 'string' && outputDirs.some((dir) => output.startsWith(dir));
+    const isOwnOutput = (output: unknown): boolean =>
+      typeof output === 'string' && outputDirs.some((dir) => output.startsWith(dir));
     const gone = Object.keys(cache.files).filter(
-      (filePath) => !pageFiles.has(filePath) && isOwnOutput(cache.files[filePath].output),
+      (filePath) => !pageFiles.has(filePath) && isOwnOutput(cache.files[filePath]?.output),
     );
 
     gone.forEach((filePath) => {
-      rmSync(cache.files[filePath].output, { force: true });
+      const output = cache.files[filePath]?.output;
+      if (output) rmSync(output, { force: true });
       delete cache.files[filePath];
     });
     return gone.length > 0;
@@ -282,7 +324,7 @@ export default function pugToHtmlPlugin({
     }
   };
 
-  const resolveWorkerCount = (pageCount) => {
+  const resolveWorkerCount = (pageCount: number): number => {
     if (workers === false || !canUseWorkers) return 0;
     const limit = workers === 'auto' ? Math.min(os.availableParallelism(), MAX_AUTO_WORKERS) : workers;
     return Math.min(limit, Math.floor(pageCount / MIN_PAGES_PER_WORKER));
@@ -290,7 +332,7 @@ export default function pugToHtmlPlugin({
 
   // Build: every page is compiled, the dev cache is not consulted. `outDir` is emptied during the
   // build, and a production build must not depend on file mtimes.
-  const startBuildJob = () => {
+  const startBuildJob = (): BuildJob => {
     const startedAt = performance.now();
     const pages = collectPages();
     const workerCount = resolveWorkerCount(pages.length);
@@ -305,7 +347,7 @@ export default function pugToHtmlPlugin({
       workerCount,
       workerData: { templateParams: templateParamsSpec, filters: filtersSpec, pugOptions },
     });
-    const job = { pages, workerCount, startedAt, promise, cancel, compiledAt: null };
+    const job: BuildJob = { pages, workerCount, startedAt, promise, cancel, compiledAt: null };
     promise.then(
       () => {
         job.compiledAt = performance.now();
@@ -317,9 +359,9 @@ export default function pugToHtmlPlugin({
     return job;
   };
 
-  const finishBuildJob = async (job) => {
+  const finishBuildJob = async (job: BuildJob) => {
     const waitStartedAt = performance.now();
-    let results;
+    let results: RenderResult[];
     if (job.promise) {
       results = await job.promise;
     } else {
@@ -329,20 +371,20 @@ export default function pugToHtmlPlugin({
 
     const cache = loadCache();
     writtenFiles.length = 0;
-    job.pages.forEach((page, index) => writePage(page, results[index], cache));
+    job.pages.forEach((page, index) => writePage(page, results[index] as RenderResult, cache));
     // Lets the next dev start skip the pages this build has just written.
     if (writtenFiles.length > 0) writeCache(cache);
 
-    const seconds = (from, to = performance.now()) => `${((to - from) / 1000).toFixed(2)}s`;
+    const seconds = (from: number, to = performance.now()) => `${((to - from) / 1000).toFixed(2)}s`;
     logBuildOutput(
       job.promise
-        ? `${seconds(job.startedAt, job.compiledAt)} in ${job.workerCount} workers, ${seconds(waitStartedAt)} after the bundle`
+        ? `${seconds(job.startedAt, job.compiledAt ?? undefined)} in ${job.workerCount} workers, ${seconds(waitStartedAt)} after the bundle`
         : seconds(waitStartedAt),
     );
   };
 
   const collectWatchedDirs = () => {
-    const dirs = new Set();
+    const dirs = new Set<string>();
 
     Object.values(globResults).forEach((files) => {
       files.forEach((f) => dirs.add(path.dirname(f)));
@@ -358,13 +400,14 @@ export default function pugToHtmlPlugin({
     return dirs;
   };
 
-  const refreshOnPugChange = async (server, file) => {
+  const refreshOnPugChange = async (server: ViteDevServer, file: string) => {
     if (!file.endsWith('.pug')) return;
     try {
       await compileStale();
       server.ws.send({ type: 'full-reload' });
-    } catch (error) {
+    } catch (cause) {
       // A broken template must not take the dev server down: report it and wait for the fix.
+      const error = cause instanceof Error ? cause : new Error(String(cause));
       server.config.logger.error(pc.red(error.message), { error });
       server.ws.send({ type: 'error', err: { message: error.message, stack: error.stack ?? '' } });
     }
@@ -372,7 +415,7 @@ export default function pugToHtmlPlugin({
 
   return {
     name: 'pug-to-html',
-    configResolved(config) {
+    configResolved(config: ResolvedConfig) {
       isBuild = config.command === 'build';
       viteCacheDir = config.cacheDir;
       logger = config.logger ?? consoleLogger;
@@ -383,7 +426,7 @@ export default function pugToHtmlPlugin({
       buildJob?.cancel();
       buildJob = startBuildJob();
     },
-    buildEnd(error) {
+    buildEnd(error?: Error) {
       if (error) buildJob?.cancel();
     },
     async closeBundle() {
@@ -398,14 +441,14 @@ export default function pugToHtmlPlugin({
         if (!(error instanceof CompileCancelledError)) throw error;
       }
     },
-    async configureServer(server) {
+    async configureServer(server: ViteDevServer) {
       await compileStale();
 
       collectWatchedDirs().forEach((dir) => server.watcher.add(dir));
 
-      server.watcher.on('add', (file) => refreshOnPugChange(server, file));
-      server.watcher.on('change', (file) => refreshOnPugChange(server, file));
-      server.watcher.on('unlink', (file) => refreshOnPugChange(server, file));
+      server.watcher.on('add', (file: string) => refreshOnPugChange(server, file));
+      server.watcher.on('change', (file: string) => refreshOnPugChange(server, file));
+      server.watcher.on('unlink', (file: string) => refreshOnPugChange(server, file));
     },
   };
 }

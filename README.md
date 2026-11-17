@@ -79,16 +79,16 @@ or extended by pages (layouts, partials, mixins) must not match the globs.
 
 ## Options
 
-| Option                 | Type                               | Default           | Description                                                     |
-| ---------------------- | ---------------------------------- | ----------------- | --------------------------------------------------------------- |
-| `input`                | `{ [subfolder]: glob \| glob[] }`  | required          | Pages to compile, grouped by output subfolder (fast-glob)       |
-| `dest`                 | `string`                           | required          | Output directory                                                |
-| `templateParams`       | `object`                           | `{}`              | Locals passed to every template                                 |
-| `templateParamsModule` | `string` or `{ path, exportName }` | none              | Absolute path of a module that exports the locals               |
-| `filtersModule`        | `string` or `{ path, exportName }` | none              | Absolute path of a module that exports pug filters              |
-| `pugOptions`           | `object`                           | `{}`              | See [Pug options](#pug-options)                                 |
-| `workers`              | `'auto'`, `number` or `false`      | `'auto'`          | Worker threads used in a build                                  |
-| `cacheDir`             | `string`                           | Vite's `cacheDir` | Directory of the dev cache file `pug-cache.json`                |
+| Option                 | Type                               | Default           | Description                                               |
+| ---------------------- | ---------------------------------- | ----------------- | --------------------------------------------------------- |
+| `input`                | `{ [subfolder]: glob \| glob[] }`  | required          | Pages to compile, grouped by output subfolder (fast-glob) |
+| `dest`                 | `string`                           | required          | Output directory                                          |
+| `templateParams`       | `object`                           | `{}`              | Locals passed to every template                           |
+| `templateParamsModule` | `string` or `{ path, exportName }` | none              | Absolute path of a module that exports the locals         |
+| `filtersModule`        | `string` or `{ path, exportName }` | none              | Absolute path of a module that exports pug filters        |
+| `pugOptions`           | `object`                           | `{}`              | See [Pug options](#pug-options)                           |
+| `workers`              | `'auto'`, `number` or `false`      | `'auto'`          | Worker threads used in a build                            |
+| `cacheDir`             | `string`                           | Vite's `cacheDir` | Directory of the dev cache file `pug-cache.json`          |
 
 Invalid options throw when the plugin is created, not during the build.
 
@@ -261,12 +261,17 @@ Pug alone, by number of workers (nothing else running):
 
 ## Development
 
+The source is TypeScript in `src/`; the package ships the compiled JavaScript and declarations from `dist/`.
+
 ```sh
-npm install
-npm run check   # types, tests, package contents
+mise install    # pinned tools: node, hk and the linters
+mise run setup  # npm ci and the git hooks
+mise run check  # every check, the same set CI runs
+npm run check   # only the package part: build, types, lint, format, Knip, tests, package contents
 ```
 
-The tests use `node:test` and temporary fixture directories, and call the hooks in the order Vite does.
+The tests use `node:test` and temporary fixture directories, and call the hooks in the order Vite does. They run
+against the built package, so `npm test` needs `npm run build` first.
 
 ## License
 
