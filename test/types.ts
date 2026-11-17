@@ -1,4 +1,4 @@
-// Type-checked by `npm run typecheck`; never executed.
+// Type-checked by `pnpm run typecheck`; never executed.
 import type { Plugin, UserConfig } from 'vite';
 import pugToHtmlPlugin from 'vite-plugin-pug-to-html';
 

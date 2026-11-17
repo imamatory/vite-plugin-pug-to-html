@@ -264,14 +264,14 @@ Pug alone, by number of workers (nothing else running):
 The source is TypeScript in `src/`; the package ships the compiled JavaScript and declarations from `dist/`.
 
 ```sh
-mise install    # pinned tools: node, hk and the linters
-mise run setup  # npm ci and the git hooks
-mise run check  # every check, the same set CI runs
-npm run check   # only the package part: build, types, lint, format, Knip, tests, package contents
+mise install # pinned tools: node, hk and the linters
+mise run setup # pnpm install and the git hooks
+mise run check # every check, the same set CI runs
+pnpm run check # only the package part: build, types, lint, format, Knip, tests, package contents
 ```
 
 The tests use `node:test` and temporary fixture directories, and call the hooks in the order Vite does. They run
-against the built package, so `npm test` needs `npm run build` first.
+against the built package, so `pnpm test` needs `pnpm run build` first.
 
 ## License
 

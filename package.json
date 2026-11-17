@@ -33,13 +33,13 @@
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
-    "prepack": "npm run build",
+    "prepack": "pnpm run build",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --import tsx --test test/*.test.ts",
     "lint": "oxlint --deny-warnings",
     "format": "oxfmt --check",
     "knip": "knip",
-    "check": "npm run build && npm run typecheck && npm run lint && npm run format && npm run knip && npm test && npm pack --dry-run",
+    "check": "pnpm run build && pnpm run typecheck && pnpm run lint && pnpm run format && pnpm run knip && pnpm test && pnpm pack --dry-run",
     "fix": "oxlint --fix && oxfmt",
     "commitlint": "commitlint --from origin/main --to HEAD"
   },
@@ -50,13 +50,13 @@
   "devDependencies": {
     "@commitlint/cli": "^21.2.4",
     "@commitlint/config-conventional": "^21.2.4",
-    "@types/node": "^22.0.0",
+    "@types/node": "^22.20.5",
     "knip": "^6.45.1",
     "oxfmt": "^0.79.0",
     "oxlint": "^1.94.0",
     "pug": "^3.0.4",
     "tsx": "^4.23.15",
-    "typescript": "^5.9.0",
+    "typescript": "^7.0.2",
     "vite": "^8.3.8"
   },
   "peerDependencies": {
@@ -65,5 +65,6 @@
   },
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
-  }
+  },
+  "packageManager": "pnpm@12.21.0"
 }

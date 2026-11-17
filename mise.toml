@@ -1,6 +1,7 @@
 # One toolchain for developers, git hooks and CI: `mise install`, then `mise run check`.
 [tools]
 node = "24.18.1"
+pnpm = "12.21.0"
 hk = "2.12.0"
 pkl = "0.33.0"
 betterleaks = "1.10.1"
@@ -13,7 +14,7 @@ typos = "1.52.2"
 
 [tasks.setup]
 description = "Install dependencies and the git hooks"
-run = ["npm ci", "hk install"]
+run = ["pnpm install --frozen-lockfile", "hk install"]
 
 [tasks.check]
 description = "Run every check, the same set CI runs"
@@ -25,4 +26,4 @@ run = "hk fix --all"
 
 [tasks.audit]
 description = "Scan the lockfile for known vulnerabilities (also runs on a schedule in CI)"
-run = "osv-scanner scan source --lockfile package-lock.json"
+run = "osv-scanner scan source --lockfile pnpm-lock.yaml"
