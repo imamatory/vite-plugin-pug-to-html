@@ -1,0 +1,57 @@
+{
+  "name": "vite-plugin-pug-to-html",
+  "version": "0.1.0",
+  "description": "Vite plugin that compiles standalone Pug pages to static HTML files, in worker threads while the bundle builds",
+  "keywords": [
+    "vite",
+    "vite-plugin",
+    "pug",
+    "html",
+    "templates",
+    "static"
+  ],
+  "license": "MIT",
+  "author": "Vadim Safonov",
+  "homepage": "https://github.com/imamatory/vite-plugin-pug-to-html#readme",
+  "bugs": "https://github.com/imamatory/vite-plugin-pug-to-html/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imamatory/vite-plugin-pug-to-html.git"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./index.d.ts",
+  "files": [
+    "src",
+    "index.d.ts"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "typecheck": "tsc -p tsconfig.json",
+    "check": "npm run typecheck && npm test && npm pack --dry-run"
+  },
+  "dependencies": {
+    "fast-glob": "^3.3.3",
+    "picocolors": "^1.1.1"
+  },
+  "peerDependencies": {
+    "pug": "^3.0.0",
+    "vite": ">=5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "pug": "^3.0.4",
+    "typescript": "^5.9.0",
+    "vite": "^8.3.8"
+  }
+}
