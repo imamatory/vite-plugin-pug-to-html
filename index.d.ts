@@ -1,20 +1,27 @@
 import type { Plugin } from 'vite';
 
-/** Pug compiler options the plugin accepts. Function-valued options (`filters`, `plugins`) are not supported. */
+/**
+ * Pug compiler options the plugin accepts. Function-valued options are not: pass `filters` with the
+ * `filtersModule` plugin option; `plugins` are not supported.
+ */
 export interface PugToHtmlPugOptions {
   /** Root for absolute `include` and `extends` paths. */
   basedir?: string;
   doctype?: string;
+  /** Other names for filters, e.g. `{ md: 'markdown' }`. Aliases cannot point to other aliases. */
+  filterAliases?: Record<string, string>;
+  /** Default options of each filter, keyed by the name written in the template (the alias, if used). */
+  filterOptions?: Record<string, Record<string, unknown>>;
   globals?: string[];
   /** Indent the html. Default: `false`. */
   pretty?: boolean | string;
   self?: boolean;
 }
 
-export interface PugToHtmlTemplateParamsModule {
+export interface PugToHtmlModule {
   /** Absolute path of an ESM or CommonJS module. */
   path: string;
-  /** Named export that holds the params. Default: the default export (`module.exports`). */
+  /** Named export to use. Default: the default export (`module.exports`). */
   exportName?: string;
 }
 
@@ -32,7 +39,12 @@ export interface PugToHtmlOptions {
    * Absolute path of a module that exports the locals, or `{ path, exportName }`. Use it when the
    * locals hold functions: every worker thread imports the module itself.
    */
-  templateParamsModule?: string | PugToHtmlTemplateParamsModule;
+  templateParamsModule?: string | PugToHtmlModule;
+  /**
+   * Absolute path of a module that exports pug filters (`{ [name]: (text, options) => string }`), or
+   * `{ path, exportName }`. Every worker thread imports the module itself.
+   */
+  filtersModule?: string | PugToHtmlModule;
   pugOptions?: PugToHtmlPugOptions;
   /** Worker threads used in a build: `'auto'` (default), a number, or `false` for the main thread. */
   workers?: 'auto' | number | false;

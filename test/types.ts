@@ -6,7 +6,8 @@ const plugin: Plugin = pugToHtmlPlugin({
   input: { pages: '/abs/src/pages/*.pug', tags: ['/abs/src/tags/**/*.pug'] },
   dest: '/abs/dist',
   templateParamsModule: { path: '/abs/params.js', exportName: 'PARAMS' },
-  pugOptions: { basedir: '/abs/src', pretty: false },
+  filtersModule: '/abs/filters.js',
+  pugOptions: { basedir: '/abs/src', pretty: false, filterAliases: { md: 'markdown' }, filterOptions: { md: { html: true } } },
   workers: 'auto',
 });
 
@@ -16,5 +17,7 @@ export const config: UserConfig = {
 
 // @ts-expect-error `dest` is required
 pugToHtmlPlugin({ input: {} });
+// @ts-expect-error filters come from `filtersModule`
+pugToHtmlPlugin({ input: {}, dest: 'dist', pugOptions: { filters: {} } });
 // @ts-expect-error `workers` takes 'auto', a number or false
 pugToHtmlPlugin({ input: {}, dest: 'dist', workers: true });

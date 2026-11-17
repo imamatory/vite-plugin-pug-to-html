@@ -1,10 +1,13 @@
 // Worker thread entry: compiles the pages it is sent, one message per page.
 import { parentPort, workerData } from 'worker_threads';
-import { createCompiler, loadTemplateParams } from './compiler.js';
+import { createCompiler, loadModuleSpec } from './compiler.js';
 
-// Template params may hold functions, which cannot be posted: the worker imports them itself.
-const templateParams = await loadTemplateParams(workerData.templateParams);
-const compiler = createCompiler({ templateParams, pugOptions: workerData.pugOptions });
+// Template params and filters may hold functions, which cannot be posted: the worker imports them.
+const [templateParams, filters] = await Promise.all([
+  loadModuleSpec(workerData.templateParams),
+  loadModuleSpec(workerData.filters),
+]);
+const compiler = createCompiler({ templateParams, filters, pugOptions: workerData.pugOptions });
 
 // Messages posted before this listener is attached are queued by the port.
 parentPort.on('message', ({ id, filePath }) => {

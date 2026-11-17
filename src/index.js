@@ -7,7 +7,10 @@
 // - `templateParamsModule`: absolute path of a module that exports the params, or
 //   `{ path, exportName }`. Use it instead of `templateParams` when the params hold functions:
 //   functions cannot be sent to worker threads, so each worker imports the module itself.
-// - `pugOptions`: `basedir`, `doctype`, `globals`, `pretty` (default `false`), `self`.
+// - `filtersModule`: absolute path of a module that exports pug filters, or `{ path, exportName }`.
+//   Every worker imports it itself.
+// - `pugOptions`: `basedir`, `doctype`, `filterAliases`, `filterOptions`, `globals`, `pretty`
+//   (default `false`), `self`.
 // - `workers`: `'auto'` (default), a number of worker threads, or `false` to compile on the main
 //   thread.
 // - `cacheDir`: directory of the dev cache. Default: Vite's `cacheDir`.
@@ -16,11 +19,11 @@
 // written in `closeBundle`. They cannot be written earlier: `vite:prepare-out-dir` empties
 // `outDir` in `renderStart`, after `buildStart`.
 // Dev: pages are compiled on the main thread, and only when a page or its includes changed.
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { createRequire } from 'module';
 import os from 'os';
 import path from 'path';
-import { createCompiler, loadTemplateParams, validatePugOptions } from './compiler.js';
+import { createCompiler, loadModuleSpec, validatePugOptions } from './compiler.js';
 import { CompileCancelledError, compileInWorkers } from './pool.js';
 
 const require = createRequire(import.meta.url);
@@ -62,9 +65,17 @@ const resolveTemplateParamsSpec = (templateParams, templateParamsModule) => {
     throw new Error('pug-to-html: pass either "templateParams" or "templateParamsModule", not both');
   }
 
-  const spec = typeof templateParamsModule === 'string' ? { path: templateParamsModule } : templateParamsModule;
+  return resolveModuleOption('templateParamsModule', templateParamsModule);
+};
+
+// `filtersModule`: filters are functions, so they always come from a module the workers import.
+const resolveFiltersSpec = (filtersModule) =>
+  filtersModule === undefined ? { value: {} } : resolveModuleOption('filtersModule', filtersModule);
+
+const resolveModuleOption = (name, option) => {
+  const spec = typeof option === 'string' ? { path: option } : option;
   if (!spec || typeof spec.path !== 'string' || !path.isAbsolute(spec.path)) {
-    throw new Error('pug-to-html: "templateParamsModule" must be an absolute path or { path, exportName }');
+    throw new Error(`pug-to-html: "${name}" must be an absolute path or { path, exportName }`);
   }
   return { path: spec.path, exportName: spec.exportName };
 };
@@ -74,6 +85,7 @@ export default function pugToHtmlPlugin({
   dest,
   templateParams,
   templateParamsModule,
+  filtersModule,
   pugOptions = {},
   workers = 'auto',
   cacheDir,
@@ -89,6 +101,7 @@ export default function pugToHtmlPlugin({
   }
   validatePugOptions(pugOptions);
   const templateParamsSpec = resolveTemplateParamsSpec(templateParams, templateParamsModule);
+  const filtersSpec = resolveFiltersSpec(filtersModule);
   const canUseWorkers = Boolean(templateParamsSpec.path) || isCloneable(templateParamsSpec.value);
 
   const destRoot = path.resolve(dest);
@@ -106,8 +119,8 @@ export default function pugToHtmlPlugin({
     path.resolve(cacheDir ?? viteCacheDir ?? path.resolve('node_modules/.vite'), PUG_CACHE_FILE);
 
   const getCompiler = () => {
-    compilerPromise ??= loadTemplateParams(templateParamsSpec).then((params) =>
-      createCompiler({ templateParams: params, pugOptions }),
+    compilerPromise ??= Promise.all([loadModuleSpec(templateParamsSpec), loadModuleSpec(filtersSpec)]).then(
+      ([params, filters]) => createCompiler({ templateParams: params, filters, pugOptions }),
     );
     return compilerPromise;
   };
@@ -230,19 +243,42 @@ export default function pugToHtmlPlugin({
     cache.files[filePath] = { output: htmlPath, dependencies: allDependencies, mtimes };
   };
 
+  // Removes the html of pages that are in the cache but no longer matched by `input`. Only paths
+  // recorded in the cache are removed, and only inside this plugin's output folders: another plugin
+  // instance can share the cache file. When a current page writes the same html file, its html is
+  // now missing, so `compileStale` writes it again instead of keeping the removed page's content.
+  // Returns whether the cache changed.
+  const removeGonePages = (pages, cache) => {
+    const pageFiles = new Set(pages.map((page) => page.filePath));
+    const outputDirs = Object.keys(input).map((subfolder) => path.resolve(destRoot, subfolder) + path.sep);
+    const isOwnOutput = (output) => typeof output === 'string' && outputDirs.some((dir) => output.startsWith(dir));
+    const gone = Object.keys(cache.files).filter(
+      (filePath) => !pageFiles.has(filePath) && isOwnOutput(cache.files[filePath].output),
+    );
+
+    gone.forEach((filePath) => {
+      rmSync(cache.files[filePath].output, { force: true });
+      delete cache.files[filePath];
+    });
+    return gone.length > 0;
+  };
+
   // Dev: compile on the main thread the pages whose html is missing or older than its sources.
   const compileStale = async () => {
     const compiler = await getCompiler();
     const cache = loadCache();
     writtenFiles.length = 0;
+    let cacheChanged = false;
 
     try {
-      collectPages().forEach((page) => {
+      const pages = collectPages();
+      cacheChanged = removeGonePages(pages, cache);
+      pages.forEach((page) => {
         if (isCacheFresh(page.htmlPath, cache.files[page.filePath])) return;
         writePage(page, compiler.render(page.filePath), cache);
       });
     } finally {
-      if (writtenFiles.length > 0) writeCache(cache);
+      if (cacheChanged || writtenFiles.length > 0) writeCache(cache);
     }
   };
 
@@ -267,7 +303,7 @@ export default function pugToHtmlPlugin({
     const { promise, cancel } = compileInWorkers({
       files: pages.map((page) => page.filePath),
       workerCount,
-      workerData: { templateParams: templateParamsSpec, pugOptions },
+      workerData: { templateParams: templateParamsSpec, filters: filtersSpec, pugOptions },
     });
     const job = { pages, workerCount, startedAt, promise, cancel, compiledAt: null };
     promise.then(

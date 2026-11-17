@@ -81,6 +81,22 @@ afterEach(() => {
     }
   });
 
+  test(`filters from filtersModule apply as in pug.compileFile (workers: ${workers})`, async (t) => {
+    silenceConsole(t);
+    writePages(20);
+    write('pages/filtered.pug', 'div\n  :wrap(tag="em")\n    hello\n');
+    const filtersFile = path.join(root, 'filters.mjs');
+    writeFileSync(filtersFile, 'export const FILTERS = { wrap: (text, { tag }) => `<${tag}>${text.toUpperCase()}</${tag}>` };\n');
+
+    await runBuild(createPlugin({ workers, filtersModule: { path: filtersFile, exportName: 'FILTERS' } }));
+
+    const expected = pug.compileFile(path.join(src, 'pages/filtered.pug'), {
+      filters: { wrap: (text, { tag }) => `<${tag}>${text.toUpperCase()}</${tag}>` },
+    })();
+    assert.equal(expected, '<div><em>HELLO</em></div>');
+    assert.equal(readFileSync(path.join(dest, 'pages/filtered.html'), 'utf8'), expected);
+  });
+
   test(`a syntax error fails the build and names the file (workers: ${workers})`, async (t) => {
     silenceConsole(t);
     writePages(20);
@@ -116,6 +132,34 @@ test('an error in an included file names the page and the include', async (t) =>
     assert.ok(error.message.includes(path.join(src, 'partials/header.pug')));
     return true;
   });
+});
+
+test('filterAliases and filterOptions reach the filter', async (t) => {
+  silenceConsole(t);
+  writePages(20);
+  write('pages/aliased.pug', 'div\n  :w\n    hello\n');
+  const filtersFile = path.join(root, 'filters.cjs');
+  writeFileSync(filtersFile, 'module.exports = { wrap: (text, { tag }) => `<${tag}>${text}</${tag}>` };\n');
+
+  // Like pug, filterOptions are keyed by the name written in the template, the alias here.
+  const pugOptions = { filterAliases: { w: 'wrap' }, filterOptions: { w: { tag: 'b' } } };
+
+  await runBuild(createPlugin({ workers: 2, filtersModule: filtersFile, pugOptions }));
+
+  const expected = pug.compileFile(path.join(src, 'pages/aliased.pug'), {
+    ...pugOptions,
+    filters: { wrap: (text, { tag }) => `<${tag}>${text}</${tag}>` },
+  })();
+  assert.equal(expected, '<div><b>hello</b></div>');
+  assert.equal(readFileSync(path.join(dest, 'pages/aliased.html'), 'utf8'), expected);
+});
+
+test('a filters module that fails to import fails the build', async (t) => {
+  silenceConsole(t);
+  writePages(20);
+  const plugin = createPlugin({ workers: 2, filtersModule: path.join(root, 'missing-filters.cjs') });
+
+  await assert.rejects(runBuild(plugin), /missing-filters\.cjs/);
 });
 
 test('a failed bundle cancels the compilation and writes nothing', async (t) => {
@@ -157,7 +201,8 @@ test('rejects invalid options', () => {
   assert.throws(() => pugToHtmlPlugin({ dest: '/tmp/x' }), /"input"/);
   assert.throws(() => pugToHtmlPlugin({ input: {} }), /"dest"/);
   assert.throws(() => pugToHtmlPlugin({ ...base, workers: -1 }), /"workers"/);
-  assert.throws(() => pugToHtmlPlugin({ ...base, pugOptions: { filters: {} } }), /unsupported pugOptions: filters/);
+  assert.throws(() => pugToHtmlPlugin({ ...base, pugOptions: { filters: {} } }), /filters.*"filtersModule"/);
+  assert.throws(() => pugToHtmlPlugin({ ...base, filtersModule: 'relative.js' }), /"filtersModule" must be an absolute/);
   assert.throws(() => pugToHtmlPlugin({ ...base, templateParamsModule: 'relative.js' }), /absolute path/);
   assert.throws(() => pugToHtmlPlugin({ ...base, templateParams: {}, templateParamsModule: '/abs.js' }), /not both/);
 });
@@ -201,6 +246,61 @@ test('dev compiles only the pages whose sources changed', async () => {
   await handlers.change(source);
   assert.equal(sent[1].type, 'error');
   assert.ok(sent[1].err.message.includes(source));
+});
+
+const startDevServer = async (plugin) => {
+  plugin.configResolved({ command: 'serve', cacheDir: path.join(root, 'cache') });
+  const handlers = {};
+  const server = {
+    watcher: { add: () => {}, on: (event, handler) => Object.assign(handlers, { [event]: handler }) },
+    ws: { send: () => {} },
+    config: { logger: { error: () => {} } },
+  };
+  await plugin.configureServer(server);
+  return handlers;
+};
+
+test('dev removes the html of a removed page and keeps the others', async () => {
+  writePages(3);
+  const handlers = await startDevServer(createPlugin());
+  const removed = path.join(src, 'pages/page1.pug');
+
+  rmSync(removed);
+  await handlers.unlink(removed);
+
+  assert.equal(existsSync(path.join(dest, 'pages/page1.html')), false);
+  assert.equal(existsSync(path.join(dest, 'pages/page0.html')), true);
+  assert.equal(existsSync(path.join(dest, 'pages/page2.html')), true);
+});
+
+test('dev does not remove the html of another plugin instance that shares the cache', async () => {
+  writePages(1);
+  write('tags/tag.pug', 'span tag\n');
+  const tagsDest = path.join(root, 'dist-tags');
+  await startDevServer(createPlugin({ input: { tags: path.join(src, 'tags/*.pug') }, dest: tagsDest }));
+
+  await startDevServer(createPlugin());
+
+  assert.equal(readFileSync(path.join(tagsDest, 'tags/tag.html'), 'utf8'), '<span>tag</span>');
+  assert.equal(existsSync(path.join(dest, 'pages/page0.html')), true);
+});
+
+test('dev rewrites an html file that another page still writes', async (t) => {
+  silenceConsole(t);
+  t.mock.method(console, 'warn', () => {});
+  writePages(1);
+  const other = write('other/page0.pug', 'p other\n');
+  const handlers = await startDevServer(
+    createPlugin({ input: { pages: [path.join(src, 'pages/*.pug'), path.join(src, 'other/*.pug')] } }),
+  );
+  const html = path.join(dest, 'pages/page0.html');
+
+  assert.equal(readFileSync(html, 'utf8'), '<p>other</p>');
+
+  rmSync(other);
+  await handlers.unlink(other);
+
+  assert.match(readFileSync(html, 'utf8'), /page 0 X/);
 });
 
 test('two pages that write the same html file are reported once', async (t) => {

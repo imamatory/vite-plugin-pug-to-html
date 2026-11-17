@@ -49,7 +49,8 @@ or extended by pages (layouts, partials, mixins) must not match the globs.
 | `dest`                 | `string`                           | required          | Output directory                                                |
 | `templateParams`       | `object`                           | `{}`              | Locals passed to every template                                 |
 | `templateParamsModule` | `string` or `{ path, exportName }` | none              | Absolute path of a module that exports the locals               |
-| `pugOptions`           | `object`                           | `{}`              | `basedir`, `doctype`, `globals`, `pretty` (default `false`), `self` |
+| `filtersModule`        | `string` or `{ path, exportName }` | none              | Absolute path of a module that exports pug filters              |
+| `pugOptions`           | `object`                           | `{}`              | See [Pug options](#pug-options)                                 |
 | `workers`              | `'auto'`, `number` or `false`      | `'auto'`          | Worker threads used in a build                                  |
 | `cacheDir`             | `string`                           | Vite's `cacheDir` | Directory of the dev cache file `pug-cache.json`                |
 
@@ -67,11 +68,40 @@ Pass either `templateParams` or `templateParamsModule`, not both.
 - The module is imported once per process and once per worker. Importing it must be cheap and free of side
   effects.
 
+### Filters
+
+[Pug filters](https://pugjs.org/language/filters.html) are functions, and functions cannot be sent to a worker
+thread. Put them in a module and pass its path as `filtersModule`; every worker imports it itself, like
+`templateParamsModule`.
+
+```js
+// pug-filters.js
+import { marked } from 'marked';
+
+export const FILTERS = {
+  markdown: (text, options) => marked(text, options),
+};
+```
+
+```js
+pugToHtml({
+  // ...
+  filtersModule: { path: path.resolve('pug-filters.js'), exportName: 'FILTERS' },
+  pugOptions: { filterAliases: { md: 'markdown' }, filterOptions: { md: { gfm: true } } },
+});
+```
+
+- The module can be ESM or CommonJS. Without `exportName` the default export (`module.exports`) is used.
+- As in pug, `filterOptions` are keyed by the name written in the template: with the alias above, `:md` gets the
+  options under `md`, not under `markdown`.
+- Filters run at compile time, once per page. They must return a string.
+
 ### Pug options
 
-Only `basedir`, `doctype`, `globals`, `pretty` and `self` are accepted. Any other key throws. Function-valued pug
-options (`filters`, `plugins`) are not supported: they cannot be sent to workers, and the plugin does not call
-`pug.compile` (see [How pages are compiled](#how-pages-are-compiled)).
+Only `basedir`, `doctype`, `filterAliases`, `filterOptions`, `globals`, `pretty` and `self` are accepted. Any
+other key throws. Function-valued pug options are not accepted: they cannot be sent to workers. Pass filters with
+`filtersModule`. Pug `plugins` are not supported, because the plugin does not call `pug.compile` (see
+[How pages are compiled](#how-pages-are-compiled)).
 
 ### Workers
 
@@ -109,6 +139,10 @@ Details:
   every file it includes or extends equals the mtime recorded in `<cacheDir>/pug-cache.json`.
 - The directories of all pages and of their dependencies are watched. Any added, changed or removed `.pug` file
   triggers a compile of the stale pages and a full page reload.
+- A page that is removed, or no longer matched by `input`, has its html removed from `dest`. This also happens
+  when the dev server starts, for pages removed while it was stopped. Only html files recorded in the dev cache
+  and inside `<dest>/<subfolder>` of this plugin's `input` are removed, so other files in `dest` and the pages of
+  another plugin instance that shares `cacheDir` are never touched.
 - A broken template does not stop the dev server. The error is logged and shown in the Vite error overlay. The
   next successful compile reloads the page.
 - A template that is broken when the dev server starts fails the start.
@@ -147,7 +181,7 @@ Cannot read properties of undefined (reading 'property')
 - An error inside an included file names both the page and the included file.
 - The first error stops the build; the other pages are not reported.
 - All workers are terminated on an error, on cancellation and when a worker crashes, so the process does not hang.
-- A template params module that fails to import fails the build.
+- A template params or filters module that fails to import fails the build.
 
 ## Safety
 
@@ -184,7 +218,8 @@ Pug alone, by number of workers (nothing else running):
 
 ## Limitations
 
-- Removing a page in dev does not remove its html from `dest`.
+- `vite build` does not remove the html of removed pages from `dest` when `dest` is outside `outDir`, which Vite
+  empties. The dev server does.
 - There is no persistent build cache. It would only pay off when the cache directory survives between CI runs.
 - Templates that call `Math.random()` produce different html on every build. The plugin does not seed it.
 

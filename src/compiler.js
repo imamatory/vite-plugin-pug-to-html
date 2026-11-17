@@ -26,24 +26,25 @@ const link = pugRequire('pug-linker');
 const generateCode = pugRequire('pug-code-gen');
 const runtimeWrap = pugRequire('pug-runtime/wrap');
 
-// Only options that survive `postMessage` to a worker. Function-valued pug options (`filters`,
-// `plugins`) are not supported.
-const PUG_OPTION_NAMES = ['basedir', 'doctype', 'globals', 'pretty', 'self'];
+// Only options that survive `postMessage` to a worker. Function-valued pug options are not
+// accepted: `filters` come from the `filtersModule` plugin option, `plugins` are not supported.
+const PUG_OPTION_NAMES = ['basedir', 'doctype', 'filterAliases', 'filterOptions', 'globals', 'pretty', 'self'];
 
 export function validatePugOptions(pugOptions) {
   const unknown = Object.keys(pugOptions).filter((name) => !PUG_OPTION_NAMES.includes(name));
   if (unknown.length > 0) {
+    const hint = unknown.includes('filters') ? '; pass filters with the "filtersModule" option' : '';
     throw new Error(
-      `pug-to-html: unsupported pugOptions: ${unknown.join(', ')} (supported: ${PUG_OPTION_NAMES.join(', ')})`,
+      `pug-to-html: unsupported pugOptions: ${unknown.join(', ')} (supported: ${PUG_OPTION_NAMES.join(', ')})${hint}`,
     );
   }
 }
 
 /**
- * Resolve template params from a spec that can be sent to a worker:
- * `{ value }` (a plain object) or `{ path, exportName }` (a module to import).
+ * Resolve an object from a spec that can be sent to a worker: `{ value }` (a plain object) or
+ * `{ path, exportName }` (a module to import). Used for template params and for filters.
  */
-export async function loadTemplateParams(spec) {
+export async function loadModuleSpec(spec) {
   if (!spec.path) return spec.value;
 
   const mod = await import(pathToFileURL(spec.path).href);
@@ -56,7 +57,7 @@ export async function loadTemplateParams(spec) {
   return params;
 }
 
-export function createCompiler({ templateParams = {}, pugOptions = {} } = {}) {
+export function createCompiler({ templateParams = {}, filters: customFilters = {}, pugOptions = {} } = {}) {
   validatePugOptions(pugOptions);
 
   // filename → { source, ast }. An entry is reused only while the file content is the same, so
@@ -88,7 +89,9 @@ export function createCompiler({ templateParams = {}, pugOptions = {} } = {}) {
         return readFileSync(filename);
       },
     });
-    const ast = link(filters.handleFilters(loaded, {}));
+    const ast = link(
+      filters.handleFilters(loaded, customFilters, pugOptions.filterOptions, pugOptions.filterAliases),
+    );
     const body = generateCode(ast, {
       compileDebug,
       pretty: pugOptions.pretty ?? false,
