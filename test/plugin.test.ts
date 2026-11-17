@@ -1,4 +1,4 @@
-// Run: npm test
+// Run: pnpm test
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';

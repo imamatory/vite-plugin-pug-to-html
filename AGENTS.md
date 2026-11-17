@@ -5,9 +5,9 @@ A Vite plugin written in TypeScript (`src/`), published as compiled JavaScript f
 ## Checks
 
 - `mise run check` runs every check (hk): lint, format, types, Knip, tests, package contents, spelling, Markdown, links, secrets and workflows. CI runs the same command. A change is done only when it passes.
-- `npm run check` is the package part of it: build, typecheck, Oxlint, oxfmt, Knip, tests and `npm pack --dry-run`.
+- `pnpm run check` is the package part of it: build, typecheck, Oxlint, oxfmt, Knip, tests and `pnpm pack --dry-run`.
 - `mise run fix` applies the safe autofixes. Review the diff.
-- Tests import the built package from `dist/`, so `npm test` needs `npm run build` first. `npm run check` does both.
+- Tests import the built package from `dist/`, so `pnpm test` needs `pnpm run build` first. `pnpm run check` does both.
 
 ## Rules
 
