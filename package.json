@@ -50,13 +50,13 @@
   "devDependencies": {
     "@commitlint/cli": "^21.2.4",
     "@commitlint/config-conventional": "^21.2.4",
-    "@types/node": "^22.0.0",
+    "@types/node": "^22.20.5",
     "knip": "^6.45.1",
     "oxfmt": "^0.79.0",
     "oxlint": "^1.94.0",
     "pug": "^3.0.4",
     "tsx": "^4.23.15",
-    "typescript": "^5.9.0",
+    "typescript": "^7.0.2",
     "vite": "^8.3.8"
   },
   "peerDependencies": {
