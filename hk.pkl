@@ -34,6 +34,8 @@ local all = (fast) {
     }
     ["lychee"] {
         glob = List("**/*.md")
+        // The generated changelog links to a compare URL whose tag is pushed after the pre-push hook runs.
+        exclude = List("CHANGELOG.md")
         check = "lychee --no-progress {{ files }}"
     }
 }
