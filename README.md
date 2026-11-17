@@ -1,13 +1,49 @@
 # vite-plugin-pug-to-html
 
-A Vite plugin that compiles standalone [Pug](https://pugjs.org) pages into static html files. Use it when the html
-is not an entry point of the bundle: the files are written next to the bundle and consumed by something else, for
-example a backend (Django, Rails, Laravel) that loads them as templates.
+A Vite plugin that compiles [Pug](https://pugjs.org) files into html files for something other than Vite to use:
+a backend that renders them as templates, a mailer, a CMS, a plain web server. Vite bundles your scripts and
+styles; this plugin writes the html next to the bundle, in the same `vite build` and `vite` dev server.
 
 - Pages are compiled in worker threads **while the bundler works**, so they add almost nothing to `vite build`.
 - Each layout and include is parsed once, not once per page: about 3x faster than `pug.compileFile` on one thread.
 - In dev only pages whose sources changed are compiled, and the browser reloads.
 - Errors name the page, the pug file and line, with a code frame. A broken page does not stop the dev server.
+
+## When to use
+
+The html is an **output** of the build, not an entry point of the bundle. Vite does not read it, and the plugin
+does not rewrite the `<script>` and `<link>` tags in it.
+
+- **Backend templates.** Django, Jinja, Rails, Laravel, Go or any other server renders the html. Write the markup in
+  pug and keep the backend's own syntax in the text (`| {{ user.name }}`, `| {% block content %}{% endblock %}`).
+  The backend loads the files from `dest`.
+- **Server-side fragments.** Html snippets (widgets, banners, components) that a CMS, an SSI include or an edge
+  worker inserts into pages.
+- **Email templates.** A mailer reads the html and fills in the data. Pug layouts and mixins keep the repetitive
+  table markup of emails short.
+- **Moving off gulp or grunt.** A multi-page site built with `gulp-pug` and a JS/CSS pipeline moves to Vite without
+  turning hundreds of pages into Vite entry points. The 305-page project in [Performance](#performance) is one.
+- **Many pages.** Hundreds of pages that share layouts and includes. This is where the worker threads and the parse
+  cache matter; with a few pages any pug plugin is fast enough.
+
+### Linking the bundle
+
+Since Vite does not process the html, link the scripts and styles the way a backend does:
+
+- with a backend integration that reads Vite's manifest: [django-vite](https://github.com/MrBin99/django-vite),
+  [Vite Ruby](https://vite-ruby.netlify.app), [Laravel Vite](https://laravel.com/docs/vite), or your own helper
+  over [`build.manifest`](https://vite.dev/guide/backend-integration);
+- or with fixed file names (`build.rollupOptions.output.entryFileNames`) and plain paths in the pug.
+
+## When to use another plugin
+
+- **Pug fragments inside `index.html`** of a single-page app:
+  [vite-plugin-pug](https://github.com/SubZtep/vite-plugin-pug) or
+  [vite-plugin-pug-transformer](https://github.com/TheSeally/vite-plugin-pug-transformer).
+- **A static site where every pug page is a Vite entry point**, so Vite bundles and hashes the scripts and styles
+  each page links: [@vituum/vite-plugin-pug](https://github.com/vituum/vite-plugin-pug) or
+  [vite-pug-static-builder](https://github.com/ozekimasaki/vite-pug-static-builder).
+- **`<template lang="pug">` in Vue components**: no plugin is needed, install `pug`.
 
 ## Install
 
