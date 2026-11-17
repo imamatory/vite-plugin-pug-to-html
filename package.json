@@ -36,7 +36,10 @@
     "prepack": "npm run build",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --import tsx --test test/*.test.ts",
-    "check": "npm run build && npm run typecheck && npm test && npm pack --dry-run"
+    "lint": "oxlint --deny-warnings",
+    "format": "oxfmt --check",
+    "check": "npm run build && npm run typecheck && npm run lint && npm run format && npm test && npm pack --dry-run",
+    "fix": "oxlint --fix && oxfmt"
   },
   "dependencies": {
     "fast-glob": "^3.3.3",
@@ -44,6 +47,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "oxfmt": "^0.79.0",
+    "oxlint": "^1.94.0",
     "pug": "^3.0.4",
     "tsx": "^4.23.15",
     "typescript": "^5.9.0",
