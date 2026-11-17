@@ -1,0 +1,64 @@
+amends "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Builtins.pkl"
+
+// Pre-commit runs the fast checks on staged files. `check` and CI run everything, including
+// the package checks (`npm run check`) and the network-bound link check.
+local fast = new Mapping<String, Step> {
+    ["oxlint"] {
+        glob = List("**/*.ts", "**/*.js")
+        check = "npx oxlint --deny-warnings {{ files }}"
+        fix = "npx oxlint --fix {{ files }}"
+    }
+    ["oxfmt"] {
+        glob = List("**/*.ts", "**/*.js", "**/*.json", "**/*.md")
+        check = "npx oxfmt --check {{ files }}"
+        fix = "npx oxfmt {{ files }}"
+    }
+    ["rumdl"] = Builtins.rumdl
+    ["typos"] = Builtins.typos
+    ["jactionlint"] = Builtins.jactionlint
+    ["agnix"] {
+        glob = List("AGENTS.md", "CLAUDE.md", ".claude/**", "**/SKILL.md")
+        check = "agnix --strict ."
+    }
+    ["betterleaks"] {
+        check = "betterleaks dir --no-banner {{ files }}"
+    }
+}
+
+local all = (fast) {
+    ["package"] {
+        // build, typecheck, lint, format, knip, tests and the package contents.
+        glob = List("src/**", "test/**", "package.json", "package-lock.json", "tsconfig*.json", "knip.json")
+        check = "npm run --silent check"
+    }
+    ["lychee"] {
+        glob = List("**/*.md")
+        check = "lychee --no-progress {{ files }}"
+    }
+}
+
+hooks {
+    ["pre-commit"] {
+        fix = true
+        stash = "git"
+        steps = fast
+    }
+    ["commit-msg"] {
+        steps {
+            ["commitlint"] {
+                check = "npx commitlint --edit {{ commit_msg_file }}"
+            }
+        }
+    }
+    ["pre-push"] {
+        steps = all
+    }
+    ["check"] {
+        steps = all
+    }
+    ["fix"] {
+        fix = true
+        steps = all
+    }
+}
