@@ -1,5 +1,7 @@
 # vite-plugin-pug-to-html
 
+[![npm version](https://img.shields.io/npm/v/vite-plugin-pug-to-html)](https://www.npmjs.com/package/vite-plugin-pug-to-html)
+
 A Vite plugin that compiles [Pug](https://pugjs.org) files into html files for something other than Vite to use:
 a backend that renders them as templates, a mailer, a CMS, a plain web server. Vite bundles your scripts and
 styles; this plugin writes the html next to the bundle, in the same `vite build` and `vite` dev server.
